@@ -1,0 +1,38 @@
+[
+  {
+    "id": 1,
+    "patientName": "أحمد محمد علي",
+    "age": 34,
+    "gender": "Male",
+    "fractureSite": "Distal Radius (الساعد)",
+    "surgeryDate": "2026-08-15",
+    "recoveryProgress": 85,
+    "status": "Normal",
+    "statusLabel": "تعافي مستقر",
+    "doctorNotes": "التئام ممتاز مع انخفاض ملحوظ في الحمل على الشريحة."
+  },
+  {
+    "id": 2,
+    "patientName": "سارة محمود خليل",
+    "age": 28,
+    "gender": "Female",
+    "fractureSite": "Tibia (قصبة الساق)",
+    "surgeryDate": "2026-09-01",
+    "recoveryProgress": 42,
+    "status": "Warning",
+    "statusLabel": "تحذير: إجهاد غير طبيعي",
+    "doctorNotes": "تنبيه الذكاء الاصطناعي: قياسات الضغط أعلى من المتوقع للسبوع الرابع."
+  },
+  {
+    "id": 3,
+    "patientName": "عمر خالد حسن",
+    "age": 45,
+    "gender": "Male",
+    "fractureSite": "Femur (الفخذ)",
+    "surgeryDate": "2026-09-20",
+    "recoveryProgress": 20,
+    "status": "Normal",
+    "statusLabel": "تحت المتابعة الأولى",
+    "doctorNotes": "بداية المرحلة الأولى للتحلل والمتابعة الحيوية."
+  }
+]
