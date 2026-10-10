@@ -1,0 +1,109 @@
+// Emoheal frontend entry: hash router, role guards, and the header.
+//
+// Routes
+//   #/           public home (platform stats and reviews)
+//   #/login      sign in
+//   #/dashboard  doctor: all patients | patient: own recovery only
+//   #/assistant  doctor only: AI diagnostic / data testing assistant
+
+import { clearSession, getSession, saveSession } from "./api.js";
+import { esc, icon } from "./format.js";
+import { renderAssistant } from "./views/assistant.js";
+import { renderDashboard } from "./views/dashboard.js";
+import { renderHome } from "./views/home.js";
+import { renderLogin } from "./views/login.js";
+
+const root = document.getElementById("view");
+const nav = document.getElementById("main-nav");
+const sessionSlot = document.getElementById("session-slot");
+
+// `roles: null` means public. Otherwise the signed-in user must have one of these roles.
+const ROUTES = {
+  "/": { render: renderHome, roles: null },
+  "/login": { render: renderLogin, roles: null },
+  "/dashboard": { render: renderDashboard, roles: ["doctor", "patient"] },
+  "/assistant": { render: renderAssistant, roles: ["doctor"] },
+};
+
+let notice = "";
+
+function navigate(path) {
+  if (location.hash === `#${path}`) route();
+  else location.hash = path;
+}
+
+function setSession(session) {
+  saveSession(session);
+}
+
+function signOut() {
+  clearSession();
+  navigate("/");
+}
+
+function currentPath() {
+  const path = location.hash.replace(/^#/, "") || "/";
+  return ROUTES[path] ? path : "/";
+}
+
+function navLinks(session) {
+  const links = [{ path: "/", label: "Home" }];
+  if (session?.user.role === "doctor") {
+    links.push({ path: "/dashboard", label: "Patients" }, { path: "/assistant", label: "AI assistant" });
+  } else if (session?.user.role === "patient") {
+    links.push({ path: "/dashboard", label: "My recovery" });
+  }
+  return links;
+}
+
+function renderHeader(session, path) {
+  nav.innerHTML = navLinks(session)
+    .map((link) => `<a href="#${link.path}"${link.path === path ? ' aria-current="page"' : ""}>${esc(link.label)}</a>`)
+    .join("");
+
+  if (!session) {
+    sessionSlot.innerHTML = `<a class="btn btn-header" href="#/login">Sign in</a>`;
+    return;
+  }
+
+  const roleLabel = session.user.role === "doctor" ? "Doctor" : "Patient";
+  sessionSlot.innerHTML = `
+    <span class="session-user">${icon("user", 18)}<span>${esc(session.user.name)}</span><span class="session-role">${roleLabel}</span></span>
+    <button type="button" class="btn btn-header" id="sign-out">Sign out</button>`;
+  sessionSlot.querySelector("#sign-out").addEventListener("click", signOut);
+}
+
+async function route() {
+  let path = currentPath();
+  const session = getSession();
+  const definition = ROUTES[path];
+
+  // Guards: signed-out users go to sign-in, and users never reach a page their role forbids.
+  if (definition.roles) {
+    if (!session) {
+      notice = "Sign in to see recovery data.";
+      path = "/login";
+    } else if (!definition.roles.includes(session.user.role)) {
+      path = "/dashboard";
+    }
+  } else if (path === "/login" && session) {
+    path = "/dashboard";
+  }
+
+  if (`#${path}` !== (location.hash || "#/")) history.replaceState(null, "", `#${path}`);
+
+  renderHeader(session, path);
+  const ctx = { session, notice, navigate, setSession };
+  notice = "";
+
+  await ROUTES[path].render(root, ctx);
+  document.title = `Emoheal | ${path === "/" ? "Smart orthopedic healing" : path.slice(1).replace(/^./, (c) => c.toUpperCase())}`;
+}
+
+window.addEventListener("hashchange", route);
+window.addEventListener("emoheal:session-expired", () => {
+  notice = "Your session expired. Sign in again.";
+  navigate("/login");
+});
+
+route().then(() => root.focus({ preventScroll: true }));
