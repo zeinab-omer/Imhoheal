@@ -1,15 +1,13 @@
-"""Emoheal API server.
-
-Run:  python app.py   ->  http://localhost:5000
-The same server also hosts the frontend, so one command runs the whole demo.
-"""
-
+import math
 import os
+import re
+import secrets
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
-
 from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
-
 import ai
 from auth import (
     authenticate,
@@ -27,19 +25,98 @@ from data import (
     get_user,
     list_patients,
 )
+from storage import authenticate_device, patient_motion, register_device, save_motion_reading
+from supabase_client import (
+    SupabaseError,
+    delete_rows,
+    get_or_create_profile,
+    invite_user,
+    insert_rows,
+    is_configured as supabase_is_configured,
+    query_rows,
+    refresh_session,
+    select_rows,
+    sign_in,
+    update_rows,
+    update_password,
+)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _load_local_environment():
+    environment_file = Path(__file__).resolve().parent / ".env"
+    if not environment_file.exists():
+        return
+    for line in environment_file.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, value = stripped.split("=", 1)
+        value = value.strip().strip("\"'")
+        os.environ.setdefault(name.strip(), value)
+
+
+_load_local_environment()
 
 app = Flask(__name__, static_folder=None)
 app.config["SECRET_KEY"] = os.environ.get("EMOHEAL_SECRET_KEY", "dev-only-change-me")
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+app.config["DATABASE_PATH"] = os.environ.get(
+    "EMOHEAL_DATABASE_PATH",
+    str(Path(__file__).resolve().parent / "instance" / "emoheal.sqlite3"),
+)
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get(
+        "IMHOHEAL_CORS_ORIGINS",
+        "http://localhost:5000,http://127.0.0.1:5000,http://localhost:5500,http://127.0.0.1:5500",
+    ).split(",")
+    if origin.strip()
+]
+CORS(app, resources={r"/api/*": {"origins": cors_origins}})
 
 
-# --------------------------------------------------------------------------- #
-# Serializers
-# --------------------------------------------------------------------------- #
+def _patient_from_supabase(patient_id, access_token):
+    patients = select_rows(
+        "patients",
+        filters={"id": f"eq.{patient_id}"},
+        limit=1,
+        access_token=access_token,
+    )
+    if not patients:
+        return None
+    patient = patients[0]
+    patient["surgery_date"] = patient["surgery_date"][:10]
+    logs = query_rows(
+        "weekly_readings",
+        {
+            "select": "week,recorded_at,strain_load,bone_density",
+            "patient_id": f"eq.{patient_id}",
+            "order": "week.asc",
+        },
+        access_token=access_token,
+    )
+    patient["logs"] = [
+        {
+            "week": row["week"],
+            "date": row["recorded_at"][:10],
+            "strain_load": row["strain_load"],
+            "bone_density": row["bone_density"],
+        }
+        for row in logs
+    ]
+    return patient
 def patient_summary(patient):
     """Compact record for the doctor's patient list (no full sensor history)."""
+    if not patient["logs"]:
+        return {
+            **{key: value for key, value in patient.items() if key != "logs"},
+            "latest": None,
+            "status": "early",
+            "headline": "No weekly readings yet",
+        }
     analysis = ai.analyze(patient["logs"])
     latest = patient["logs"][-1]
     return {
@@ -60,21 +137,71 @@ def patient_summary(patient):
     }
 
 
-def patient_detail(patient):
+def patient_detail(patient, access_token=None):
     """Full record: profile, weekly sensor logs, AI insights and forecast."""
-    return {
+    detail = {
         **{key: value for key, value in patient.items()},
-        "analysis": ai.analyze(patient["logs"]),
+        "motion": patient_motion(
+            app.config["DATABASE_PATH"], patient["id"], access_token=access_token
+        ),
         "thresholds": {
             "strain_warning_pct": STRAIN_WARNING_PCT,
             "union_density_target": UNION_DENSITY_TARGET,
         },
     }
+    if patient["logs"]:
+        detail["analysis"] = ai.analyze(patient["logs"])
+    return detail
 
 
-# --------------------------------------------------------------------------- #
-# Public endpoints
-# --------------------------------------------------------------------------- #
+def _utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _motion_reading(body):
+    if not isinstance(body, dict):
+        raise ValueError("Send a JSON object.")
+
+    sequence = body.get("sequence")
+    if (
+        isinstance(sequence, bool)
+        or not isinstance(sequence, int)
+        or not 1 <= sequence <= 2**63 - 1
+    ):
+        raise ValueError("'sequence' must be a positive 64-bit integer.")
+
+    recorded_at = body.get("recorded_at")
+    if recorded_at is None:
+        recorded_at = _utc_now()
+    if not isinstance(recorded_at, str):
+        raise ValueError("'recorded_at' must be an ISO 8601 timestamp.")
+    try:
+        parsed_time = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+    except ValueError as problem:
+        raise ValueError("'recorded_at' must be an ISO 8601 timestamp.") from problem
+    if parsed_time.tzinfo is None:
+        raise ValueError("'recorded_at' must include a timezone, such as Z.")
+    normalized_time = parsed_time.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    clean = {"sequence": sequence, "recorded_at": normalized_time}
+    for field, bound in (("accelerometer_g", 16), ("gyroscope_dps", 2000)):
+        vector = body.get(field)
+        if not isinstance(vector, dict):
+            raise ValueError(f"'{field}' must contain numeric x, y and z values.")
+        values = {}
+        for axis in ("x", "y", "z"):
+            value = vector.get(axis)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"'{field}.{axis}' must be a number.")
+            if value < -bound or value > bound or (
+                isinstance(value, float) and not math.isfinite(value)
+            ):
+                raise ValueError(f"'{field}.{axis}' must be between {-bound} and {bound}.")
+            values[axis] = float(value)
+        clean[field] = values
+    return clean
+
+
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok", "service": "emoheal-api"})
@@ -83,6 +210,70 @@ def health():
 @app.get("/api/public/stats")
 def public_stats():
     """Aggregate, non-identifying numbers for the public landing section."""
+    if supabase_is_configured():
+        try:
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                patients_future = executor.submit(
+                    query_rows,
+                    "patients",
+                    {"select": "id,weeks_since_surgery"},
+                    admin=True,
+                )
+                readings_future = executor.submit(
+                    query_rows,
+                    "weekly_readings",
+                    {
+                        "select": "patient_id,week,strain_load,bone_density",
+                        "order": "patient_id.asc,week.asc",
+                    },
+                    admin=True,
+                )
+                reviews_future = executor.submit(
+                    query_rows,
+                    "public_reviews",
+                    {
+                        "select": "author,review_text,rating",
+                        "data_source": "eq.demo",
+                        "order": "id.asc",
+                    },
+                )
+                patients = patients_future.result()
+                readings = readings_future.result()
+                reviews = reviews_future.result()
+        except SupabaseError as problem:
+            return error_response(str(problem), problem.status)
+
+        readings_by_patient = {}
+        for reading in readings:
+            readings_by_patient.setdefault(reading["patient_id"], []).append(reading)
+        statuses = [
+            ai.analyze(readings_by_patient[patient["id"]])["status"]
+            for patient in patients
+            if readings_by_patient.get(patient["id"])
+        ]
+        on_track = sum(1 for status in statuses if status in ("on_track", "early"))
+        average_rating = (
+            sum(review["rating"] for review in reviews) / len(reviews) if reviews else 0
+        )
+        case_count = len(patients)
+        return jsonify({
+            "demo_data": True,
+            "total_monitored_cases": case_count,
+            "on_track_percent": round(100 * on_track / len(statuses)) if statuses else 0,
+            "average_weeks_monitored": round(
+                sum(patient["weeks_since_surgery"] for patient in patients) / case_count, 1
+            ) if case_count else 0,
+            "average_rating": round(average_rating, 1),
+            "reviews": [
+                {
+                    "author": review["author"],
+                    "text": review["review_text"],
+                    "rating": review["rating"],
+                }
+                for review in reviews
+            ],
+        })
+
     patients = list_patients()
     statuses = [ai.analyze(p["logs"])["status"] for p in patients]
     on_track = sum(1 for s in statuses if s in ("on_track", "early"))
@@ -106,6 +297,34 @@ def public_stats():
 @app.post("/api/auth/login")
 def login():
     body = request.get_json(silent=True) or {}
+    if supabase_is_configured():
+        if not isinstance(body, dict):
+            return error_response("Send a JSON object.", 400)
+        email = str(body.get("email", "")).strip().lower()
+        password = str(body.get("password", ""))
+        if not email or not password:
+            return error_response("Enter your email and password.", 400)
+        try:
+            session = sign_in(email, password)
+            profile = get_or_create_profile(session["user"], session["access_token"])
+        except SupabaseError as problem:
+            return error_response(str(problem), problem.status)
+        return jsonify({
+            "token": session["access_token"],
+            "refresh_token": session["refresh_token"],
+            "expires_in": session.get("expires_in"),
+            "user": {
+                **profile,
+                "email": session["user"].get("email", email),
+            },
+        })
+
+    if not app.config["TESTING"]:
+        return error_response(
+            "Supabase is not configured. Copy backend/.env.example to backend/.env and add the server key.",
+            503,
+        )
+
     username = str(body.get("username", "")).strip().lower()
     user = authenticate(username, str(body.get("password", "")))
     if not user:
@@ -113,10 +332,51 @@ def login():
     return jsonify({"token": issue_token(username), "user": public_user(username, user)})
 
 
+@app.post("/api/auth/refresh")
+def auth_refresh():
+    if not supabase_is_configured():
+        return error_response("Session refresh is only available with Supabase Auth.", 404)
+    body = request.get_json(silent=True) or {}
+    refresh_token = str(body.get("refresh_token", "")).strip()
+    if not refresh_token:
+        return error_response("A refresh token is required.", 400)
+    try:
+        session = refresh_session(refresh_token)
+        profile = get_or_create_profile(session["user"], session["access_token"])
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
+    return jsonify({
+        "token": session["access_token"],
+        "refresh_token": session["refresh_token"],
+        "expires_in": session.get("expires_in"),
+        "user": {
+            **profile,
+            "email": session["user"].get("email", ""),
+        },
+    })
+
+
+@app.put("/api/auth/password")
+@login_required
+def auth_update_password():
+    if not supabase_is_configured():
+        return error_response("Password updates require Supabase Auth.", 404)
+    body = request.get_json(silent=True) or {}
+    password = str(body.get("password", "")) if isinstance(body, dict) else ""
+    if len(password) < 8 or len(password) > 128:
+        return error_response("Password must be between 8 and 128 characters.", 400)
+    try:
+        update_password(g.supabase_token, password)
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
+    return jsonify({"updated": True})
+
+
 @app.get("/api/auth/me")
 @login_required
 def me():
-    return jsonify({"user": public_user(g.username, g.user)})
+    user = g.user if supabase_is_configured() else public_user(g.username, g.user)
+    return jsonify({"user": user})
 
 
 # --------------------------------------------------------------------------- #
@@ -126,6 +386,65 @@ def me():
 @roles_required("doctor")
 def patients():
     """Doctors only: every patient with a one-line AI status."""
+    if supabase_is_configured():
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                records_future = executor.submit(
+                    select_rows,
+                    "patients",
+                    order="name.asc",
+                    access_token=g.supabase_token,
+                )
+                logs_future = executor.submit(
+                    query_rows,
+                    "weekly_readings",
+                    {
+                        "select": "patient_id,week,recorded_at,strain_load,bone_density",
+                        "order": "patient_id.asc,week.asc",
+                    },
+                    access_token=g.supabase_token,
+                )
+                records = records_future.result()
+                all_logs = logs_future.result()
+        except SupabaseError as problem:
+            return error_response(str(problem), problem.status)
+
+        logs_by_patient = {}
+        for row in all_logs:
+            logs_by_patient.setdefault(row["patient_id"], []).append(row)
+
+        summaries = []
+        for record in records:
+            logs = logs_by_patient.get(record["id"], [])
+            clean_logs = [
+                {
+                    "week": row["week"],
+                    "date": row["recorded_at"][:10],
+                    "strain_load": row["strain_load"],
+                    "bone_density": row["bone_density"],
+                }
+                for row in logs
+            ]
+            if not clean_logs:
+                summaries.append({
+                    **record,
+                    "latest": None,
+                    "status": "early",
+                    "headline": "No weekly readings yet",
+                })
+                continue
+            analysis = ai.analyze(clean_logs)
+            summaries.append({
+                **record,
+                "weeks_since_surgery": max(record["weeks_since_surgery"], clean_logs[-1]["week"]),
+                "latest": {
+                    "strain_load": clean_logs[-1]["strain_load"],
+                    "bone_density": clean_logs[-1]["bone_density"],
+                },
+                "status": analysis["status"],
+                "headline": analysis["insights"][0]["title"],
+            })
+        return jsonify({"patients": summaries})
     return jsonify({"patients": [patient_summary(p) for p in list_patients()]})
 
 
@@ -136,17 +455,255 @@ def patient(patient_id):
     if g.user["role"] == "patient" and g.user["patient_id"] != patient_id:
         return error_response("You can only view your own recovery data.", 403)
 
-    record = get_patient(patient_id)
+    try:
+        record = (
+            _patient_from_supabase(patient_id, g.supabase_token)
+            if supabase_is_configured()
+            else get_patient(patient_id)
+        )
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
     if not record:
         return error_response("Patient not found.", 404)
-    return jsonify({"patient": patient_detail(record)})
+    if record["logs"]:
+        record["weeks_since_surgery"] = max(
+            record["weeks_since_surgery"], record["logs"][-1]["week"]
+        )
+    try:
+        detail = patient_detail(record, g.supabase_token if supabase_is_configured() else None)
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
+    return jsonify({"patient": detail})
 
 
 @app.get("/api/me/patient")
 @roles_required("patient")
 def my_patient():
     """Shortcut for the patient portal: the signed-in patient's own record."""
-    return jsonify({"patient": patient_detail(get_patient(g.user["patient_id"]))})
+    patient_id = g.user["patient_id"]
+    try:
+        record = (
+            _patient_from_supabase(patient_id, g.supabase_token)
+            if supabase_is_configured()
+            else get_patient(patient_id)
+        )
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
+    if not record:
+        return error_response("No patient record is linked to this account.", 404)
+    if record["logs"]:
+        record["weeks_since_surgery"] = max(
+            record["weeks_since_surgery"], record["logs"][-1]["week"]
+        )
+    try:
+        detail = patient_detail(record, g.supabase_token if supabase_is_configured() else None)
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
+    return jsonify({"patient": detail})
+
+
+# --------------------------------------------------------------------------- #
+# ESP32 motion-sensor prototype (MPU6050)
+# --------------------------------------------------------------------------- #
+@app.post("/api/devices")
+@roles_required("doctor")
+def create_device():
+    """Pair a device to a patient and return its secret token exactly once."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return error_response("Send a JSON object.", 400)
+    device_id = str(body.get("device_id", "")).strip()
+    patient_id = str(body.get("patient_id", "")).strip()
+    if not DEVICE_ID_PATTERN.fullmatch(device_id):
+        return error_response(
+            "Device ID must be 1-64 letters, numbers, dots, dashes or underscores.",
+            400,
+        )
+    if supabase_is_configured():
+        try:
+            patient_rows = select_rows(
+                "patients",
+                filters={"id": f"eq.{patient_id}"},
+                limit=1,
+                access_token=g.supabase_token,
+            )
+        except SupabaseError as problem:
+            return error_response(str(problem), problem.status)
+        if not patient_rows:
+            return error_response("Patient not found.", 404)
+    elif not get_patient(patient_id):
+        return error_response("Patient not found.", 404)
+
+    token = secrets.token_urlsafe(32)
+    try:
+        register_device(
+            app.config["DATABASE_PATH"],
+            device_id,
+            patient_id,
+            token,
+            _utc_now(),
+            access_token=g.supabase_token if supabase_is_configured() else None,
+        )
+    except sqlite3.IntegrityError:
+        return error_response("That device ID is already paired.", 409)
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
+    return jsonify({
+        "device": {"id": device_id, "patient_id": patient_id},
+        "token": token,
+        "message": "Save this token now. It cannot be retrieved later.",
+    }), 201
+
+
+@app.post("/api/devices/<device_id>/readings")
+def ingest_motion_reading(device_id):
+    """Accept MPU6050 motion data; this is not a bone-density or plate-strain sensor."""
+    token = request.headers.get("X-Device-Token", "")
+    try:
+        patient_id = authenticate_device(app.config["DATABASE_PATH"], device_id, token)
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
+    if not patient_id:
+        return error_response("Unknown device or invalid device token.", 401)
+
+    try:
+        reading = _motion_reading(request.get_json(silent=True))
+    except ValueError as problem:
+        return error_response(str(problem), 400)
+    try:
+        save_motion_reading(app.config["DATABASE_PATH"], device_id, reading)
+    except sqlite3.IntegrityError:
+        return error_response("This sequence number was already received for the device.", 409)
+    except SupabaseError as problem:
+        if problem.status == 409:
+            return error_response("This sequence number was already received for the device.", 409)
+        return error_response(str(problem), problem.status)
+    return jsonify({
+        "accepted": True,
+        "device_id": device_id,
+        "patient_id": patient_id,
+        "reading": reading,
+        "note": "Motion data only; not a measure of bone healing, bone density or plate strain.",
+    }), 201
+
+
+@app.post("/api/admin/invitations")
+@roles_required("doctor")
+def invite_patient():
+    """Invite a patient and link their profile to an existing or newly created record."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return error_response("Send a JSON object.", 400)
+    email = str(body.get("email", "")).strip().lower()
+    name = str(body.get("name", "")).strip()
+    record_mode = str(body.get("record_mode", "existing")).strip()
+    if not email or "@" not in email or len(email) > 254:
+        return error_response("Enter a valid email address.", 400)
+    if not name or len(name) > 120:
+        return error_response("Enter a name up to 120 characters.", 400)
+    if record_mode not in ("existing", "new"):
+        return error_response("Choose an existing record or create a new one.", 400)
+
+    if supabase_is_configured():
+        created_patient_id = None
+        patient_created = False
+        invitation_sent = False
+        try:
+            if record_mode == "new":
+                raw_age = body.get("age")
+                try:
+                    age_text = str(raw_age).strip()
+                    if not age_text.isdecimal():
+                        raise ValueError
+                    age = int(age_text)
+                    surgery_date = datetime.strptime(
+                        str(body.get("surgery_date", "")), "%Y-%m-%d"
+                    ).date()
+                except (TypeError, ValueError):
+                    return error_response("Enter a valid age and surgery date.", 400)
+                if isinstance(raw_age, bool) or not 0 <= age <= 125:
+                    return error_response("Age must be between 0 and 125.", 400)
+                if surgery_date > datetime.now(timezone.utc).date():
+                    return error_response("Surgery date cannot be in the future.", 400)
+                sex = str(body.get("sex", "")).strip()
+                injury = str(body.get("injury", "")).strip()
+                implant = str(body.get("implant", "")).strip()
+                if sex not in ("Male", "Female", "Other", "Prefer not to say"):
+                    return error_response("Choose a valid sex option.", 400)
+                if not injury or len(injury) > 160:
+                    return error_response("Enter an injury up to 160 characters.", 400)
+                if not implant or len(implant) > 120:
+                    return error_response("Enter an implant description up to 120 characters.", 400)
+                created_patient_id = f"P-{secrets.token_hex(6).upper()}"
+                patient_id = created_patient_id
+                weeks_since_surgery = max(0, (datetime.now(timezone.utc).date() - surgery_date).days // 7)
+                insert_rows(
+                    "patients",
+                    {
+                        "id": patient_id,
+                        "name": name,
+                        "age": age,
+                        "sex": sex,
+                        "injury": injury,
+                        "implant": implant,
+                        "surgeon": g.user["name"],
+                        "surgery_date": surgery_date.isoformat(),
+                        "weeks_since_surgery": weeks_since_surgery,
+                    },
+                    admin=True,
+                )
+                patient_created = True
+            else:
+                patient_id = str(body.get("patient_id", "")).strip()
+                if not patient_id:
+                    return error_response("Choose a patient record.", 400)
+                patients = select_rows(
+                    "patients",
+                    filters={"id": f"eq.{patient_id}"},
+                    limit=1,
+                    access_token=g.supabase_token,
+                )
+                if not patients:
+                    return error_response("Patient record not found.", 404)
+
+            invited_user = invite_user(email, name)
+            invitation_sent = True
+            profile_id = invited_user["id"]
+            updated = update_rows(
+                "profiles",
+                {"id": f"eq.{profile_id}"},
+                {"name": name, "patient_id": patient_id, "role": "patient"},
+                admin=True,
+            )
+        except SupabaseError as problem:
+            if patient_created and not invitation_sent:
+                try:
+                    delete_rows("patients", {"id": f"eq.{created_patient_id}"}, admin=True)
+                except SupabaseError as cleanup_problem:
+                    return error_response(
+                        f"{problem}. The new record {created_patient_id} could not be removed; contact the administrator.",
+                        502,
+                    )
+            if invitation_sent:
+                return error_response(
+                    f"The invitation was sent, but its profile could not be linked to record {patient_id}. Contact the project administrator. Details: {problem}",
+                    502,
+                )
+            return error_response(str(problem), problem.status)
+        if not updated:
+            return error_response(
+                f"The invitation was sent, but the profile was not linked to record {patient_id}. Contact the project administrator.",
+                502,
+            )
+        return jsonify({
+            "invited": True,
+            "email": email,
+            "patient_id": patient_id,
+            "record_created": record_mode == "new",
+            "message": "Invitation sent. The patient must set a password using the email link.",
+        }), 201
+
+    return error_response("Patient invitations require Supabase Auth configuration.", 503)
 
 
 # --------------------------------------------------------------------------- #
@@ -205,4 +762,8 @@ def server_error(_):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(
+        host=os.environ.get("EMOHEAL_HOST", "127.0.0.1"),
+        port=int(os.environ.get("EMOHEAL_PORT", "5000")),
+        debug=os.environ.get("EMOHEAL_DEBUG", "false").lower() == "true",
+    )
