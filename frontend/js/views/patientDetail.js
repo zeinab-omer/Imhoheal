@@ -136,9 +136,9 @@ function renderMotionData(motion) {
     const devices = motion.devices.length
       ? `<p class="motion-devices">Paired devices: ${motion.devices.map((device) =>
         `<span>${esc(device.id)} · ${device.sample_count ?? "—"} samples</span>`).join("")}</p>`
-      : `<p class="muted">No ESP32 is paired to this patient yet.</p>`;
+      : `<p class="muted">No device is paired to this patient yet.</p>`;
     if (!motion.readings.length) {
-      return `${devices}<p class="empty">No motion readings received yet.</p>`;
+      return `${devices}<p class="empty">No accelerometer motion readings received yet.</p>${renderWristReadings(motion)}`;
     }
 
     const readings = motion.readings;
@@ -172,7 +172,36 @@ function renderMotionData(motion) {
             </tbody>
           </table>
         </div>
-      </details>`;
+      </details>
+      ${renderWristReadings(motion)}`;
+}
+
+function renderWristReadings(motion) {
+  if (!motion.wrist_readings?.length) return "";
+  return `
+    <section class="wrist-readings" aria-labelledby="wrist-readings-title">
+      <h4 id="wrist-readings-title">Arduino wrist-angle readings</h4>
+      <p class="field-hint">Relative angle and alarm state from the Arduino sketch. This is not a medical measurement.</p>
+      <p class="motion-summary"><span>Readings loaded: <strong>${motion.wrist_sample_count}</strong></span></p>
+      ${motion.wrist_truncated ? `<p class="field-hint">Showing the latest ${motion.wrist_readings.length} readings.</p>` : ""}
+      <details class="table-view">
+        <summary>View wrist-angle readings</summary>
+        <div class="table-wrap">
+          <table>
+            <caption>Arduino samples, newest first.</caption>
+            <thead><tr><th scope="col">Time</th><th scope="col">Sequence</th><th scope="col">Angle change (°)</th><th scope="col">Alarm</th></tr></thead>
+            <tbody>${[...motion.wrist_readings].reverse().slice(0, 50).map((reading) => `
+              <tr>
+                <td>${esc(new Date(reading.recorded_at).toLocaleString())}</td>
+                <td>${reading.sequence}</td>
+                <td>${reading.angle_change.toFixed(2)}</td>
+                <td>${reading.alarm ? "Check" : "Normal"}</td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </section>`;
 }
 
 function mountMotionCharts(container, readings) {
@@ -216,20 +245,20 @@ function renderMotion(container, patient, audience) {
       <section class="motion-panel" aria-labelledby="motion-title">
         <div class="motion-heading">
           <div>
-            <h3 id="motion-title">ESP32 / MPU6050 motion data</h3>
-            <p>Prototype movement measurements only. These readings do not measure bone density, fracture healing, or plate strain.</p>
+            <h3 id="motion-title">Arduino / ESP32 sensor data</h3>
+            <p>Motion and wrist-angle measurements only. They do not measure bone density, fracture healing, or plate strain.</p>
           </div>
         </div>
         <div class="motion-data">${renderMotionData(patient.motion)}</div>
         ${audience === "doctor" ? `
           <form class="device-pair-form">
-            <h4>Pair a device to this patient</h4>
+            <h4>Pair an Arduino or ESP32 device</h4>
             <label for="device-id">Device ID</label>
             <div class="device-pair-row">
               <input id="device-id" name="device_id" value="esp32-${esc(patient.id.toLowerCase())}" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" required>
               <button class="btn btn-primary" type="submit">Create pairing token</button>
             </div>
-            <p class="field-hint">Save the token shown after pairing; it is only displayed once and must be configured on the ESP32.</p>
+            <p class="field-hint">Use a unique ID such as <code>arduino-p-1001</code>. Save the token shown after pairing; it is displayed only once. Configure it in the ESP32 sketch or Arduino logger.</p>
             <p class="device-pair-error error-box" role="alert" hidden></p>
             <div class="device-pair-result" aria-live="polite"></div>
           </form>` : ""}
@@ -256,15 +285,17 @@ function renderMotion(container, patient, audience) {
           <div class="device-token">
             <p><strong>Device paired.</strong> Copy this token now; the server stores only its hash.</p>
             <p>Device ID: <code>${esc(paired.device.id)}</code></p>
-            <label for="device-token">ESP32 token</label>
+            <label for="device-token">Device token</label>
             <textarea id="device-token" rows="2" readonly></textarea>
-            <p class="field-hint">Send readings to <code>POST /api/devices/${esc(paired.device.id)}/readings</code> with header <code>X-Device-Token</code>.</p>
+            <p class="field-hint">ESP32 motion endpoint: <code>POST /api/devices/${esc(paired.device.id)}/readings</code>. Arduino logger endpoint: <code>POST /api/devices/${esc(paired.device.id)}/wrist-readings</code>. Both use the <code>X-Device-Token</code> header.</p>
           </div>`;
         result.querySelector("#device-token").value = paired.token;
         const updated = await api.patient(patient.id);
         const data = container.querySelector(".motion-data");
         data.innerHTML = renderMotionData(updated.patient.motion);
-        mountMotionCharts(container, updated.patient.motion.readings);
+        if (updated.patient.motion.readings.length) {
+          mountMotionCharts(container, updated.patient.motion.readings);
+        }
       } catch (problem) {
         error.textContent = problem.message;
         error.hidden = false;

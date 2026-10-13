@@ -10,6 +10,22 @@
 *.userosscache
 *.sln.docstates
 
+# Python runtime and local prototype database
+__pycache__/
+*.py[cod]
+backend/instance/
+backend/.env
+.env
+.venv/
+venv/
+firmware/esp32_mpu6050/config.h
+firmware/arduino_wrist_alarm/*.json
+firmware/arduino_wrist_alarm/config.py
+firmware/arduino_wrist_alarm/sequence.txt
+firmware/arduino_wrist_alarm/sequence.tmp
+firmware/arduino_wrist_alarm/pending_readings.json
+firmware/arduino_wrist_alarm/pending_readings.tmp
+
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 

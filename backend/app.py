@@ -25,7 +25,13 @@ from data import (
     get_user,
     list_patients,
 )
-from storage import authenticate_device, patient_motion, register_device, save_motion_reading
+from storage import (
+    authenticate_device,
+    patient_motion,
+    register_device,
+    save_motion_reading,
+    save_wrist_readings,
+)
 from supabase_client import (
     SupabaseError,
     delete_rows,
@@ -199,6 +205,64 @@ def _motion_reading(body):
                 raise ValueError(f"'{field}.{axis}' must be between {-bound} and {bound}.")
             values[axis] = float(value)
         clean[field] = values
+    return clean
+
+
+def _wrist_readings(body):
+    if not isinstance(body, dict) or not isinstance(body.get("readings"), list):
+        raise ValueError("Send a JSON object with a readings list.")
+    raw_readings = body["readings"]
+    if not raw_readings or len(raw_readings) > 100:
+        raise ValueError("Send between 1 and 100 wrist readings per request.")
+
+    clean = []
+    sequences = set()
+    for index, row in enumerate(raw_readings, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"Reading {index} must be a JSON object.")
+        sequence = row.get("sequence")
+        if (
+            isinstance(sequence, bool)
+            or not isinstance(sequence, int)
+            or not 1 <= sequence <= 2**63 - 1
+        ):
+            raise ValueError(f"Reading {index}: sequence must be a positive 64-bit integer.")
+        if sequence in sequences:
+            raise ValueError("Sequence numbers must be unique within a batch.")
+        sequences.add(sequence)
+
+        angle = row.get("angle_change")
+        if (
+            isinstance(angle, bool)
+            or not isinstance(angle, (int, float))
+            or not math.isfinite(angle)
+            or not -180 <= angle <= 180
+        ):
+            raise ValueError(f"Reading {index}: angle_change must be between -180 and 180 degrees.")
+        alarm = row.get("alarm")
+        if not isinstance(alarm, bool):
+            raise ValueError(f"Reading {index}: alarm must be true or false.")
+
+        recorded_at = row.get("recorded_at")
+        if not isinstance(recorded_at, str):
+            raise ValueError(f"Reading {index}: recorded_at must be an ISO 8601 timestamp.")
+        try:
+            parsed_time = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+        except ValueError as problem:
+            raise ValueError(
+                f"Reading {index}: recorded_at must be an ISO 8601 timestamp."
+            ) from problem
+        if parsed_time.tzinfo is None:
+            raise ValueError(f"Reading {index}: recorded_at must include a timezone.")
+
+        clean.append({
+            "sequence": sequence,
+            "recorded_at": parsed_time.astimezone(timezone.utc).isoformat(
+                timespec="seconds"
+            ).replace("+00:00", "Z"),
+            "angle_change": float(angle),
+            "alarm": alarm,
+        })
     return clean
 
 
@@ -503,7 +567,7 @@ def my_patient():
 
 
 # --------------------------------------------------------------------------- #
-# ESP32 motion-sensor prototype (MPU6050)
+# Device sensor ingestion (ESP32 motion and Arduino wrist-angle samples)
 # --------------------------------------------------------------------------- #
 @app.post("/api/devices")
 @roles_required("doctor")
@@ -584,6 +648,35 @@ def ingest_motion_reading(device_id):
         "patient_id": patient_id,
         "reading": reading,
         "note": "Motion data only; not a measure of bone healing, bone density or plate strain.",
+    }), 201
+
+
+@app.post("/api/devices/<device_id>/wrist-readings")
+def ingest_wrist_readings(device_id):
+    """Accept Arduino wrist angle and alarm samples through the paired device."""
+    token = request.headers.get("X-Device-Token", "")
+    try:
+        patient_id = authenticate_device(app.config["DATABASE_PATH"], device_id, token)
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
+    if not patient_id:
+        return error_response("Unknown device or invalid device token.", 401)
+
+    try:
+        readings = _wrist_readings(request.get_json(silent=True))
+    except ValueError as problem:
+        return error_response(str(problem), 400)
+    try:
+        save_wrist_readings(app.config["DATABASE_PATH"], device_id, readings)
+    except sqlite3.IntegrityError:
+        return error_response("A wrist reading sequence was already received for this device.", 409)
+    except SupabaseError as problem:
+        return error_response(str(problem), problem.status)
+    return jsonify({
+        "accepted": len(readings),
+        "device_id": device_id,
+        "patient_id": patient_id,
+        "note": "Wrist angle and alarm samples only; not a medical measurement.",
     }), 201
 
 

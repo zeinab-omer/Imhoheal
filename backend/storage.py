@@ -47,6 +47,17 @@ def _connect(database_path):
         );
         CREATE INDEX IF NOT EXISTS idx_motion_device_time
             ON motion_readings(device_id, recorded_at DESC);
+        CREATE TABLE IF NOT EXISTS wrist_readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+            sequence INTEGER NOT NULL,
+            recorded_at TEXT NOT NULL,
+            angle_change REAL NOT NULL CHECK (angle_change BETWEEN -180 AND 180),
+            alarm INTEGER NOT NULL CHECK (alarm IN (0, 1)),
+            UNIQUE(device_id, sequence)
+        );
+        CREATE INDEX IF NOT EXISTS idx_wrist_device_time
+            ON wrist_readings(device_id, recorded_at DESC);
         """
     )
     return connection
@@ -158,6 +169,57 @@ def save_motion_reading(database_path, device_id, reading):
         )
 
 
+def save_wrist_readings(database_path, device_id, readings):
+    if supabase_is_configured():
+        try:
+            rpc(
+                "store_wrist_readings",
+                {
+                    "p_device_id": device_id,
+                    "p_readings": [
+                        {
+                            "sequence": reading["sequence"],
+                            "recorded_at": reading["recorded_at"],
+                            "angle_change": reading["angle_change"],
+                            "alarm": reading["alarm"],
+                        }
+                        for reading in readings
+                    ],
+                },
+                admin=True,
+            )
+        except SupabaseError as problem:
+            if problem.status == 409:
+                raise sqlite3.IntegrityError(
+                    "A wrist reading sequence was already received for this device."
+                ) from problem
+            raise
+        return
+
+    with _connection(database_path) as connection:
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO wrist_readings (
+                device_id, sequence, recorded_at, angle_change, alarm
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    device_id,
+                    reading["sequence"],
+                    reading["recorded_at"],
+                    reading["angle_change"],
+                    int(reading["alarm"]),
+                )
+                for reading in readings
+            ],
+        )
+        connection.execute(
+            "UPDATE devices SET last_seen_at = ? WHERE id = ?",
+            (readings[-1]["recorded_at"], device_id),
+        )
+
+
 def patient_motion(database_path, patient_id, limit=100, access_token=None):
     if supabase_is_configured():
         devices = query_rows(
@@ -170,10 +232,18 @@ def patient_motion(database_path, patient_id, limit=100, access_token=None):
             access_token=access_token,
         )
         if not devices:
-            return {"devices": [], "sample_count": 0, "readings": [], "truncated": False}
+            return {
+                "devices": [],
+                "sample_count": 0,
+                "readings": [],
+                "truncated": False,
+                "wrist_sample_count": 0,
+                "wrist_readings": [],
+                "wrist_truncated": False,
+            }
 
         device_ids = ",".join(device["id"] for device in devices)
-        rows = query_rows(
+        rows, wrist_rows = query_rows(
             "motion_readings",
             {
                 "select": (
@@ -185,9 +255,20 @@ def patient_motion(database_path, patient_id, limit=100, access_token=None):
                 "limit": str(limit + 1),
             },
             access_token=access_token,
+        ), query_rows(
+            "wrist_readings",
+            {
+                "select": "device_id,sequence,recorded_at,angle_change,alarm",
+                "device_id": f"in.({device_ids})",
+                "order": "recorded_at.desc,sequence.desc",
+                "limit": str(limit + 1),
+            },
+            access_token=access_token,
         )
         truncated = len(rows) > limit
         rows = rows[:limit]
+        wrist_truncated = len(wrist_rows) > limit
+        wrist_rows = wrist_rows[:limit]
         readings = [
             {
                 "device_id": row["device_id"],
@@ -218,6 +299,18 @@ def patient_motion(database_path, patient_id, limit=100, access_token=None):
             "sample_count": len(rows),
             "readings": readings,
             "truncated": truncated,
+            "wrist_sample_count": len(wrist_rows),
+            "wrist_readings": [
+                {
+                    "device_id": row["device_id"],
+                    "sequence": row["sequence"],
+                    "recorded_at": row["recorded_at"],
+                    "angle_change": row["angle_change"],
+                    "alarm": row["alarm"],
+                }
+                for row in reversed(wrist_rows)
+            ],
+            "wrist_truncated": wrist_truncated,
         }
 
     with _connection(database_path) as connection:
@@ -245,6 +338,17 @@ def patient_motion(database_path, patient_id, limit=100, access_token=None):
             """,
             (patient_id, limit),
         ).fetchall()
+        wrist_rows = connection.execute(
+            """
+            SELECT r.device_id, r.sequence, r.recorded_at, r.angle_change, r.alarm
+            FROM wrist_readings r
+            JOIN devices d ON d.id = r.device_id
+            WHERE d.patient_id = ?
+            ORDER BY r.recorded_at DESC, r.sequence DESC
+            LIMIT ?
+            """,
+            (patient_id, limit + 1),
+        ).fetchall()
 
     readings = [
         {
@@ -264,10 +368,24 @@ def patient_motion(database_path, patient_id, limit=100, access_token=None):
         }
         for row in reversed(rows)
     ]
+    wrist_truncated = len(wrist_rows) > limit
+    wrist_rows = wrist_rows[:limit]
     total = sum(device["sample_count"] for device in devices)
     return {
         "devices": [dict(device) for device in devices],
         "sample_count": total,
         "readings": readings,
         "truncated": total > limit,
+        "wrist_sample_count": len(wrist_rows),
+        "wrist_readings": [
+            {
+                "device_id": row["device_id"],
+                "sequence": row["sequence"],
+                "recorded_at": row["recorded_at"],
+                "angle_change": row["angle_change"],
+                "alarm": bool(row["alarm"]),
+            }
+            for row in reversed(wrist_rows)
+        ],
+        "wrist_truncated": wrist_truncated,
     }

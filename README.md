@@ -1,93 +1,109 @@
-# Emoheal
+# ImhoHeal
 
-Web dashboard prototype for **Emoheal**, an AI-integrated smart orthopedic plate that tracks healing through strain load and bone density. Flask backend, plain HTML/CSS/JS frontend, no build step.
+Research-stage orthopedic monitoring prototype with a Flask backend, plain HTML/CSS/JS frontend, Supabase Auth, and a bench-test ESP32/MPU6050 motion-data path.
 
-All patient data is fictional, and the AI is a transparent rule-based placeholder. Not for clinical use.
+**Not for clinical use.** The six patient records and weekly bone-density/strain values seeded by the migration are fictional demo data. The MPU6050 reports motion only; it does not measure bone density, fracture healing, or plate strain. The current healing analysis is a rule-based placeholder, not a trained AI model.
 
-## Run it locally
+## Connect the empty Supabase project
 
-You need Python 3.9 or newer.
+The Supabase project URL and publishable key are public client identifiers. The server also needs a Supabase **secret key** (or legacy `service_role` key) to hash device tokens, accept device readings, and send patient invitations. Keep that server key only in `backend/.env`; never place it in frontend code or send it in chat.
 
-```bash
-cd emoheal/backend
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python app.py
+1. In the Supabase Dashboard for `ImhoHeal`, open **SQL Editor**, create a query, paste and run `supabase/migrations/001_initial_schema.sql`. It creates the tables, access policies, an Auth profile trigger, and the fictional demo patient/readings data.
+2. Copy `backend/.env.example` to `backend/.env`. The example contains the supplied project URL and publishable key. Add the server-side secret key from **Project Settings → API Keys** to `SUPABASE_SECRET_KEY`.
+3. In **Authentication → URL Configuration**, set the local Site URL to `http://localhost:5000` and add it to the allowed redirect URLs. Disable public sign-ups; patient accounts should be invitation-only.
+4. Invite the first doctor from **Authentication → Users** in the Supabase Dashboard, using the email the doctor will sign in with. The database trigger initially gives new accounts the patient role. In SQL Editor, promote only that exact account to doctor:
+
+   ```sql
+   update public.profiles
+   set role = 'doctor', patient_id = null
+   where id = (
+     select id from auth.users
+     where lower(email) = lower('DOCTOR_EMAIL_HERE')
+   );
+   ```
+
+   Replace `DOCTOR_EMAIL_HERE`, then confirm one profile row was updated. Do not make ordinary patient accounts doctors.
+5. Install backend dependencies and start the server from the repository root:
+
+   ```powershell
+   python -m pip install -r backend\requirements.txt
+   python backend\app.py
+   ```
+
+6. If `001_initial_schema.sql` was applied before this change, also run `supabase/migrations/002_allow_shared_patient_records.sql` once in SQL Editor. It removes the one-account-per-record restriction; it does not copy or alter patient readings.
+7. Run `supabase/migrations/003_arduino_wrist_readings.sql` once in SQL Editor to add secure storage for Arduino wrist-angle samples.
+8. Sign in with the doctor's invited email and password. On the doctor dashboard, choose whether to share an existing record with another email or create a new patient record and send the invitation. Sharing gives the new account access to the same patient record and readings; it does not duplicate the data. A new record needs name, email, age, sex, injury, implant, and surgery date; it starts with no weekly readings, so the dashboard does not display fabricated medical measurements. Invite links return to the app, where the invited user chooses a password before continuing. Keep `APP_REDIRECT_URL` on the local app origin and add that exact URL to Supabase's allowed redirect URLs.
+
+The app uses the signed-in user's Supabase access token for normal database reads; Postgres Row Level Security restricts doctors and patients to their allowed records. The ESP32 receives a separate, randomly generated per-device token. Only its SHA-256 hash is stored in Supabase. The server secret is used only in backend requests.
+
+### Local configuration
+
+`backend/.env` is read at server startup. Restart Flask after changing it. It supports:
+
+- `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
+- `SUPABASE_SECRET_KEY` (server only; alternatively `SUPABASE_SERVICE_ROLE_KEY`)
+- `APP_REDIRECT_URL` (invitation redirect; default local app is fine)
+- `EMOHEAL_HOST` (defaults to `127.0.0.1`; use `0.0.0.0` only for a trusted LAN hardware test)
+
+Never commit `backend/.env`. It is ignored by Git. If a secret key is exposed, revoke it in Supabase and configure a new one.
+
+## ESP32 + MPU6050 tabletop test
+
+Firmware and board setup: `firmware/esp32_mpu6050/README.md`.
+
+The sketch targets a common ESP32 DevKit on GPIO 21 (SDA) and GPIO 22 (SCL). Verify your board pinout first. With power disconnected, wire MPU6050 VCC→3V3, GND→GND, SDA→GPIO 21 and SCL→GPIO 22. Do not connect I2C signals to 5 V.
+
+## Separate Arduino wrist-angle experiment
+
+The Arduino sketch and PC serial logger are stored in
+`firmware/arduino_wrist_alarm/`. The Arduino sketch drives a buzzer and LEDs
+based on wrist-angle change and sends two serial values. The Python logger
+reads that exact format, samples at most once per second, and sends batches
+through Flask to Supabase using a paired device token. Run migration
+`003_arduino_wrist_readings.sql` before using this path. See that folder's
+README for setup and pairing steps.
+
+For a same-Wi-Fi bench test, start the server in PowerShell:
+
+```powershell
+$env:EMOHEAL_HOST = "0.0.0.0"
+python backend\app.py
 ```
 
-Open **http://127.0.0.1:5000**. Flask serves the API and the frontend, so there is nothing else to start.
-
-If you would rather serve `frontend/` from another server (VS Code Live Server, `python -m http.server`), set `window.EMOHEAL_API_BASE = "http://127.0.0.1:5000"` in `frontend/js/config.js`. The frontend uses ES modules, so opening `index.html` straight from disk (`file://`) will not work.
-
-## Demo accounts
-
-| Role | Username | Password | Sees |
-|---|---|---|---|
-| Doctor | `dr.khalil` | `emoheal-doctor` | All patients, AI assistant |
-| Patient | `omar.hassan` | `emoheal-patient` | Only their own record |
-| Patient | `youssef.nabil` | `emoheal-patient` | Only their own record (has an abnormal stress alert) |
-
-Other patients follow the same pattern: `layla.mahmoud`, `nour.eldin`, `karim.adel`, `mariam.fathy`.
-
-## Project layout
-
-```
-emoheal/
-├── backend/
-│   ├── app.py            Flask routes, serializers, static hosting
-│   ├── auth.py           Signed tokens, login_required, roles_required
-│   ├── ai.py             Rule-based findings and forecast (swap in a real model here)
-│   ├── data.py           Mock patients, sensor logs, demo accounts, reviews
-│   └── requirements.txt
-└── frontend/
-    ├── index.html        Shell, icon sprite, header
-    ├── css/styles.css    Design tokens and all styles
-    └── js/
-        ├── config.js     API base URL
-        ├── api.js        fetch wrapper and session storage
-        ├── app.js        Hash router, role guards, header
-        ├── charts.js     Dependency-free SVG line chart with hover tooltip
-        ├── format.js     Escaping, icons, labels, date formatting
-        └── views/        home, login, dashboard, patientDetail, assistant
-```
+Copy `firmware/esp32_mpu6050/config.example.h` to `config.h`; set the local Wi-Fi credentials, computer LAN IP, doctor-paired device ID, and one-time device token. Upload the sketch in Arduino IDE and use Serial Monitor at 115200 baud. HTTP 201 indicates the sample was saved. Leave the sensor on a desk and gently tilt the board by hand; do not attach it to a person, implant, or patient. Use fictional demo records only, and do not expose Flask's development server to the Internet.
 
 ## API
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | GET | `/api/health` | Public | Liveness check |
-| GET | `/api/public/stats` | Public | Aggregate platform figures and reviews |
-| POST | `/api/auth/login` | Public | `{username, password}` returns `{token, user}` |
-| GET | `/api/auth/me` | Signed in | Current user |
-| GET | `/api/patients` | Doctor | All patients with AI status |
-| GET | `/api/patients/<id>` | Doctor, or the patient who owns it | Full record, sensor logs, AI analysis |
-| GET | `/api/me/patient` | Patient | The signed-in patient's own record |
-| POST | `/api/ai/predict` | Doctor | Analyse `{readings: [{week, strain_load, bone_density}]}` |
+| GET | `/api/public/stats` | Public | Clearly labelled fictional demo aggregate |
+| POST | `/api/auth/login` | Public | Supabase Auth email/password login |
+| POST | `/api/auth/refresh` | Public | Refresh an expired Supabase session |
+| GET | `/api/auth/me` | Signed in | Current Supabase profile |
+| PUT | `/api/auth/password` | Signed in | Set a password after accepting an invitation |
+| GET | `/api/patients` | Doctor | RLS-protected patient list |
+| GET | `/api/patients/<id>` | Doctor or record owner | Patient, weekly demo/research readings, motion samples |
+| GET | `/api/me/patient` | Patient | The signed-in patient's linked record |
+| POST | `/api/admin/invitations` | Doctor | Invite a patient and link the profile to an existing or newly created patient record |
+| POST | `/api/devices` | Doctor | Pair an ESP32 or Arduino device and issue its one-time token |
+| POST | `/api/devices/<device_id>/readings` | Paired device token | Persist one ESP32 MPU6050 motion sample |
+| POST | `/api/devices/<device_id>/wrist-readings` | Paired device token | Persist a batch of Arduino angle/alarm samples |
+| POST | `/api/ai/predict` | Doctor | Run the existing rule-based demo analysis on supplied weekly values |
 
-Send the token as `Authorization: Bearer <token>`. A patient requesting another patient's record gets `403`, and the patient list is not available to patient accounts at all.
+## Tests
 
-### Testing hardware data
+From the repository root:
 
-```bash
-TOKEN=$(curl -s -X POST http://127.0.0.1:5000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"dr.khalil","password":"emoheal-doctor"}' | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
-
-curl -X POST http://127.0.0.1:5000/api/ai/predict \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"readings":[{"week":1,"strain_load":74,"bone_density":182},{"week":2,"strain_load":70,"bone_density":196},{"week":3,"strain_load":66,"bone_density":212}]}'
+```powershell
+python -m unittest discover -s backend -p "test_*.py"
 ```
 
-The same data can be pasted or uploaded in the **AI assistant** page (CSV or JSON).
+Tests use the local SQLite fallback and do not require a live Supabase connection. The app is not connected to the remote project until the SQL migration is applied and `backend/.env` contains the URL, publishable key and server secret key.
 
-## Where to extend
+## Current data boundaries
 
-- **Real AI model:** replace the internals of `forecast_density` and `_build_insights` in `backend/ai.py`. Keep `validate_readings` and `analyze` so the API and UI do not change.
-- **Database:** `backend/data.py` is the only module that holds data. Replace its functions (`get_patient`, `list_patients`, `get_user`) with database queries.
-- **Live hardware:** add an ingest endpoint (for example `POST /api/devices/<id>/readings`) that stores readings, then let `GET /api/patients/<id>` read them back.
-- **New role** (for example `developer`): add it to `USERS` in `data.py`, then allow it in `roles_required(...)` for the routes it needs.
-
-## Before using real patient data
-
-This prototype is built for demos. For anything real you would need, at minimum: a managed identity provider instead of the demo accounts, HTTPS, login rate limiting, a secret key from `EMOHEAL_SECRET_KEY` (not the default), a restricted CORS origin list in `app.py`, audit logging of record access, and the regulatory and privacy review that medical software requires.
+- Supabase stores the fictional patient records and weekly demo readings, Auth profiles, device pairings, all accepted motion samples, and fictional public reviews. Public landing figures are calculated from the database and remain explicitly marked demo data.
+- ESP32 measurements are movement/rotation samples only. Do not interpret them as healing, density, load-bearing, or diagnosis.
+- Before real patient data or clinical use, the project needs real patient/account management, HTTPS device transport, secret rotation/revocation, audit and retention policies, security review, clinical/engineering validation, ethics approvals, and applicable regulatory review.

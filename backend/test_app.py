@@ -5,6 +5,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from app import app
+from storage import patient_motion
 
 
 class DeviceApiTests(unittest.TestCase):
@@ -148,6 +149,72 @@ class DeviceApiTests(unittest.TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_arduino_wrist_batch_is_validated_saved_and_readable(self):
+        device_token = self._pair_device()
+        payload = {
+            "readings": [
+                {
+                    "sequence": 1,
+                    "recorded_at": "2026-10-12T10:00:00Z",
+                    "angle_change": 1.25,
+                    "alarm": False,
+                },
+                {
+                    "sequence": 2,
+                    "recorded_at": "2026-10-12T10:00:01Z",
+                    "angle_change": 3.5,
+                    "alarm": True,
+                },
+            ],
+        }
+        headers = {"X-Device-Token": device_token}
+
+        accepted = self.client.post(
+            "/api/devices/esp32-test-01/wrist-readings",
+            headers=headers,
+            json=payload,
+        )
+        self.assertEqual(accepted.status_code, 201)
+        self.assertEqual(accepted.get_json()["accepted"], 2)
+
+        patient_token = self.client.post(
+            "/api/auth/login",
+            json={"username": "omar.hassan", "password": "emoheal-patient"},
+        ).get_json()["token"]
+        details = self.client.get(
+            "/api/me/patient",
+            headers={"Authorization": f"Bearer {patient_token}"},
+        )
+        self.assertEqual(details.status_code, 200, details.get_json())
+        wrist = details.get_json()["patient"]["motion"]["wrist_readings"]
+        self.assertEqual([reading["sequence"] for reading in wrist], [1, 2])
+        self.assertEqual(wrist[1]["angle_change"], 3.5)
+        self.assertTrue(wrist[1]["alarm"])
+
+        duplicate = self.client.post(
+            "/api/devices/esp32-test-01/wrist-readings",
+            headers=headers,
+            json=payload,
+        )
+        self.assertEqual(duplicate.status_code, 201)
+        self.assertEqual(duplicate.get_json()["accepted"], 2)
+        self.assertEqual(
+            patient_motion(app.config["DATABASE_PATH"], "P-1001")["wrist_sample_count"],
+            2,
+        )
+
+        invalid = self.client.post(
+            "/api/devices/esp32-test-01/wrist-readings",
+            headers=headers,
+            json={"readings": [{
+                "sequence": 3,
+                "recorded_at": "2026-10-12T10:00:02",
+                "angle_change": 181,
+                "alarm": 0,
+            }]},
+        )
+        self.assertEqual(invalid.status_code, 400)
 
     def test_new_patient_invitation_creates_record_then_links_profile(self):
         with (
