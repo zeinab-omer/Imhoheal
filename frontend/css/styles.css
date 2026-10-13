@@ -1,10 +1,3 @@
-/* ==========================================================================
-   Emoheal design system
-   Lapis navy + deep teal + royal gold, with restrained Pharaonic details:
-   a stepped frieze under the header, cartouche frames for patient IDs, and
-   the Eye of Horus / ankh marks. Everything else stays calm and clinical.
-   ========================================================================== */
-
 :root {
   /* Lapis navy */
   --navy-900: #0a1f36;
@@ -49,8 +42,8 @@
   --note: #33566f;
   --note-bg: #e6eef3;
 
-  --font-display: "Marcellus", "Palatino Linotype", Georgia, serif;
-  --font-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
 
   --radius: 6px;
   --shell: 1240px;
@@ -377,12 +370,24 @@ textarea { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; fon
 .page-head { margin-bottom: 1.5rem; }
 .page-head p { margin-top: 0.35rem; color: var(--ink-2); max-width: 46rem; }
 
-.doctor-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+.doctor-grid { display: grid; grid-template-columns: minmax(17rem, 0.8fr) minmax(0, 1.8fr); gap: clamp(1rem, 2vw, 1.5rem); align-items: start; }
+.doctor-grid > * { min-width: 0; }
 
 .patient-list { position: sticky; top: 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .cohort { padding: 1rem 1.1rem; border-bottom: 1px solid var(--line); background: var(--teal-50); }
 .cohort strong { font: 400 1.15rem var(--font-display); color: var(--navy-800); }
 .cohort p { font-size: 0.88rem; color: var(--ink-2); }
+.patient-invite-form { display: grid; gap: 0.55rem; padding: 1rem 1.1rem; border-bottom: 1px solid var(--line); }
+.patient-invite-form h2 { margin-bottom: 0.2rem; font: 600 1rem var(--font-body); }
+.patient-invite-form label { color: var(--navy-800); font-size: 0.85rem; font-weight: 600; }
+.patient-invite-form input, .patient-invite-form select { width: 100%; min-width: 0; min-height: 2.7rem; padding: 0.5rem 0.65rem; border: 1.5px solid var(--line-strong); border-radius: var(--radius); background: #fff; }
+.patient-invite-form select { font-size: 0.9rem; }
+.existing-patient-fields, .new-patient-fields, .invite-field { display: grid; gap: 0.35rem; min-width: 0; }
+.patient-field-pair { display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); gap: 0.75rem; }
+.patient-invite-form input[type="date"] { min-width: 0; }
+.patient-invite-form [hidden] { display: none; }
+.invite-message { min-height: 1.2em; overflow-wrap: anywhere; color: var(--ok); font-size: 0.82rem; }
+.invite-message.invite-error { color: var(--crit); }
 .patient-list ul { list-style: none; margin: 0; padding: 0; max-height: 70vh; overflow-y: auto; }
 .patient-item { display: grid; gap: 0.3rem; width: 100%; padding: 0.85rem 1.1rem; border: 0; border-bottom: 1px solid var(--line); border-left: 4px solid transparent; background: transparent; text-align: left; cursor: pointer; }
 .patient-item:hover { background: var(--teal-50); }
@@ -450,6 +455,27 @@ textarea { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; fon
 .metric-value small { font: 400 0.9rem var(--font-body); color: var(--ink-2); }
 .metric-note { font-size: 0.85rem; color: var(--ink-2); }
 
+/* ---------- ESP32 / MPU6050 prototype readings ---------- */
+.motion-panel { display: grid; gap: 1rem; padding: 1.25rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.motion-heading h3 { font-size: 1.2rem; }
+.motion-heading p { margin-top: 0.25rem; color: var(--ink-2); font-size: 0.9rem; }
+.motion-devices { display: flex; flex-wrap: wrap; gap: 0.5rem; color: var(--ink-2); font-size: 0.88rem; }
+.motion-devices span { padding: 0.15rem 0.55rem; border-radius: 999px; background: var(--teal-50); }
+.motion-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+.motion-summary > div { display: grid; gap: 0.15rem; padding: 0.75rem; border: 1px solid var(--line); border-radius: var(--radius); }
+.motion-summary span { color: var(--ink-2); font-size: 0.85rem; }
+.motion-summary strong { color: var(--navy-800); font-weight: 600; }
+.motion-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.device-pair-form { padding-top: 1rem; border-top: 1px solid var(--line); }
+.device-pair-form h4 { margin: 0 0 0.6rem; color: var(--navy-800); }
+.device-pair-form > label, .device-token label { display: block; margin-bottom: 0.3rem; font-weight: 600; color: var(--navy-800); font-size: 0.92rem; }
+.device-pair-row { display: flex; gap: 0.6rem; }
+.device-pair-row input { min-width: 0; flex: 1; padding: 0.55rem 0.7rem; border: 1.5px solid var(--line-strong); border-radius: var(--radius); background: #fff; }
+.device-pair-form .field-hint { display: block; margin-top: 0.45rem; }
+.device-pair-error { margin-top: 0.75rem; }
+.device-token { display: grid; gap: 0.4rem; margin-top: 0.75rem; padding: 0.85rem; background: var(--teal-50); border: 1px solid var(--teal-200); border-radius: var(--radius); overflow-wrap: anywhere; }
+.device-token textarea { resize: vertical; }
+
 /* ---------- Charts ---------- */
 .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .chart { margin: 0; padding: 1.1rem 1.25rem 0.9rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
@@ -512,7 +538,7 @@ th { color: var(--ink-2); font-weight: 600; background: var(--teal-50); }
 /* ---------- Responsive ---------- */
 @media (max-width: 1040px) {
   .metrics { grid-template-columns: repeat(2, 1fr); }
-  .charts { grid-template-columns: 1fr; }
+  .charts, .motion-charts { grid-template-columns: 1fr; }
   .doctor-grid, .assistant-grid { grid-template-columns: 1fr; }
   .patient-list { position: static; }
   .patient-list ul { max-height: none; display: flex; overflow-x: auto; }
@@ -536,8 +562,11 @@ th { color: var(--ink-2); font-weight: 600; background: var(--teal-50); }
 @media (max-width: 520px) {
   .shell, .header-inner { padding-left: 1rem; padding-right: 1rem; }
   .metrics { grid-template-columns: 1fr; }
+  .motion-summary { grid-template-columns: 1fr; }
+  .device-pair-row { flex-direction: column; }
   .bubble--user { max-width: 100%; }
   .alert-card { padding: 1.25rem 1.1rem 0.75rem; }
+  .patient-field-pair { grid-template-columns: 1fr 1fr; gap: 0.6rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
