@@ -1,26 +1,18 @@
-// Emoheal frontend entry: hash router, role guards, and the header.
-//
-// Routes
-//   #/           public home (platform stats and reviews)
-//   #/login      sign in
-//   #/dashboard  doctor: all patients | patient: own recovery only
-//   #/assistant  doctor only: AI diagnostic / data testing assistant
-
 import { clearSession, getSession, saveSession } from "./api.js";
 import { esc, icon } from "./format.js";
 import { renderAssistant } from "./views/assistant.js";
 import { renderDashboard } from "./views/dashboard.js";
 import { renderHome } from "./views/home.js";
 import { renderLogin } from "./views/login.js";
+import { renderSetPassword } from "./views/setPassword.js";
 
 const root = document.getElementById("view");
 const nav = document.getElementById("main-nav");
 const sessionSlot = document.getElementById("session-slot");
-
-// `roles: null` means public. Otherwise the signed-in user must have one of these roles.
 const ROUTES = {
   "/": { render: renderHome, roles: null },
   "/login": { render: renderLogin, roles: null },
+  "/set-password": { render: renderSetPassword, roles: ["doctor", "patient"] },
   "/dashboard": { render: renderDashboard, roles: ["doctor", "patient"] },
   "/assistant": { render: renderAssistant, roles: ["doctor"] },
 };
@@ -89,15 +81,13 @@ async function route() {
   } else if (path === "/login" && session) {
     path = "/dashboard";
   }
-
   if (`#${path}` !== (location.hash || "#/")) history.replaceState(null, "", `#${path}`);
-
   renderHeader(session, path);
   const ctx = { session, notice, navigate, setSession };
   notice = "";
 
   await ROUTES[path].render(root, ctx);
-  document.title = `Emoheal | ${path === "/" ? "Smart orthopedic healing" : path.slice(1).replace(/^./, (c) => c.toUpperCase())}`;
+  document.title = `ImhoHeal | ${path === "/" ? "Orthopedic research prototype" : path.slice(1).replace(/^./, (c) => c.toUpperCase())}`;
 }
 
 window.addEventListener("hashchange", route);
@@ -106,4 +96,30 @@ window.addEventListener("emoheal:session-expired", () => {
   navigate("/login");
 });
 
-route().then(() => root.focus({ preventScroll: true }));
+async function handleAuthCallback() {
+  const params = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const type = params.get("type");
+  const accessToken = params.get("access_token");
+  const refreshToken = params.get("refresh_token");
+  if (!accessToken || !refreshToken || !["invite", "recovery"].includes(type)) return false;
+
+  const session = { token: accessToken, refresh_token: refreshToken };
+  saveSession(session);
+  try {
+    const response = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Invitation could not be verified.");
+    saveSession({ ...session, user: payload.user });
+    history.replaceState(null, "", `${location.pathname}#/set-password`);
+    return true;
+  } catch {
+    clearSession();
+    notice = "This invitation link is invalid or expired. Ask the doctor to send a new one.";
+    history.replaceState(null, "", `${location.pathname}#/login`);
+    return true;
+  }
+}
+
+handleAuthCallback().then(() => route()).then(() => root.focus({ preventScroll: true }));

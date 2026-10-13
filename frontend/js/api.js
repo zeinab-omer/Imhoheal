@@ -1,9 +1,8 @@
 // API client and session storage. Every network call in the app goes through here.
 
 const API_BASE = (window.EMOHEAL_API_BASE || "").replace(/\/$/, "");
-const SESSION_KEY = "emoheal.session";
+const SESSION_KEY = "imhoheal.session";
 
-// sessionStorage keeps the sign-in per tab, which suits shared clinic computers.
 export function getSession() {
   try {
     return JSON.parse(sessionStorage.getItem(SESSION_KEY));
@@ -35,7 +34,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, { method = "GET", body, auth = true } = {}) {
+async function request(path, options = {}, alreadyRefreshed = false) {
+  const { method = "GET", body, auth = true } = options;
   const headers = { "Content-Type": "application/json" };
   const session = getSession();
   if (auth && session) headers.Authorization = `Bearer ${session.token}`;
@@ -48,15 +48,34 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
-    throw new ApiError("Cannot reach the Emoheal server. Check that it is running.", 0);
+    throw new ApiError("Cannot reach the ImhoHeal server. Check that it is running.", 0);
   }
 
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     if (response.status === 401 && auth) {
-      clearSession();
-      window.dispatchEvent(new CustomEvent("emoheal:session-expired"));
+      if (session?.refresh_token && !alreadyRefreshed) {
+        try {
+          const refreshResponse = await fetch(API_BASE + "/api/auth/refresh", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: session.refresh_token }),
+          });
+          const refreshed = await refreshResponse.json();
+          if (!refreshResponse.ok) {
+            throw new Error(refreshed.error || "Session refresh failed.");
+          }
+          saveSession(refreshed);
+          return request(path, options, true);
+        } catch {
+          clearSession();
+          window.dispatchEvent(new CustomEvent("emoheal:session-expired"));
+        }
+      } else {
+        clearSession();
+        window.dispatchEvent(new CustomEvent("emoheal:session-expired"));
+      }
     }
     throw new ApiError(data.error || "The request failed. Try again.", response.status);
   }
@@ -65,10 +84,20 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
 
 export const api = {
   publicStats: () => request("/api/public/stats", { auth: false }),
-  login: (username, password) =>
-    request("/api/auth/login", { method: "POST", body: { username, password }, auth: false }),
+  login: (email, password) =>
+    request("/api/auth/login", { method: "POST", body: { email, password }, auth: false }),
+  me: () => request("/api/auth/me"),
+  updatePassword: (password) =>
+    request("/api/auth/password", { method: "PUT", body: { password } }),
   patients: () => request("/api/patients"),
   patient: (id) => request(`/api/patients/${encodeURIComponent(id)}`),
   myPatient: () => request("/api/me/patient"),
+  createDevice: (deviceId, patientId) =>
+    request("/api/devices", { method: "POST", body: { device_id: deviceId, patient_id: patientId } }),
+  invitePatient: (patient) =>
+    request("/api/admin/invitations", {
+      method: "POST",
+      body: patient,
+    }),
   predict: (readings) => request("/api/ai/predict", { method: "POST", body: { readings } }),
 };
