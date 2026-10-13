@@ -11,7 +11,7 @@ export function renderDashboard(root, ctx) {
 }
 
 // ---------- Doctor ----------
-async function renderDoctorDashboard(root, ctx) {
+async function renderDoctorDashboard(root, ctx, preferredPatientId = null) {
   root.innerHTML = `
     <div class="shell page">
       <header class="page-head">
@@ -42,6 +42,58 @@ async function renderDoctorDashboard(root, ctx) {
           <strong>${patients.length} patients</strong>
           <p>${needsAttention} need attention, ${watching} to watch closely.</p>
         </div>
+        <form class="patient-invite-form">
+          <h2>Add or invite a patient</h2>
+          <label for="invite-name">Patient name</label>
+          <input id="invite-name" name="name" type="text" maxlength="120" required>
+          <label for="invite-email">Email address</label>
+          <input id="invite-email" name="email" type="email" autocomplete="email" required>
+          <label for="record-mode">Patient record</label>
+          <select id="record-mode" name="record_mode">
+            <option value="existing">Share an existing record</option>
+            <option value="new">Create a new record</option>
+          </select>
+          <div class="existing-patient-fields">
+            <p class="field-hint">The invited account will access the same record and readings. No data is copied.</p>
+            <label for="invite-patient">Choose patient record to share</label>
+            <select id="invite-patient" name="patient_id" required>
+            <option value="">Choose a patient record</option>
+            ${patients.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join("")}
+            </select>
+          </div>
+          <div class="new-patient-fields" hidden>
+            <div class="patient-field-pair">
+              <div class="invite-field">
+                <label for="patient-age">Age</label>
+                <input id="patient-age" name="age" type="number" min="0" max="125" step="1">
+              </div>
+              <div class="invite-field">
+                <label for="patient-sex">Sex</label>
+                <select id="patient-sex" name="sex">
+                  <option value="">Choose</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                  <option value="Prefer not to say">Prefer not to say</option>
+                </select>
+              </div>
+            </div>
+            <div class="invite-field">
+              <label for="patient-injury">Injury</label>
+              <input id="patient-injury" name="injury" type="text" maxlength="160">
+            </div>
+            <div class="invite-field">
+              <label for="patient-implant">Implant</label>
+              <input id="patient-implant" name="implant" type="text" maxlength="120">
+            </div>
+            <div class="invite-field">
+              <label for="surgery-date">Surgery date</label>
+              <input id="surgery-date" name="surgery_date" type="date">
+            </div>
+          </div>
+          <p class="invite-message" role="status" aria-live="polite"></p>
+          <button class="btn btn-primary btn-small" type="submit">Add patient and send invitation</button>
+        </form>
         <ul>
           ${patients.map((p) => `
             <li>
@@ -57,6 +109,72 @@ async function renderDoctorDashboard(root, ctx) {
     </div>`;
 
   const pane = root.querySelector("#patient-pane");
+  const inviteForm = root.querySelector(".patient-invite-form");
+  const recordMode = inviteForm.elements.record_mode;
+  const existingFields = inviteForm.querySelector(".existing-patient-fields");
+  const newFields = inviteForm.querySelector(".new-patient-fields");
+  const existingRecord = inviteForm.elements.patient_id;
+  const newRecordFields = [
+    inviteForm.elements.age,
+    inviteForm.elements.sex,
+    inviteForm.elements.injury,
+    inviteForm.elements.implant,
+    inviteForm.elements.surgery_date,
+  ];
+
+  function updateRecordMode() {
+    const creating = recordMode.value === "new";
+    existingFields.hidden = creating;
+    existingRecord.required = !creating;
+    existingRecord.disabled = creating;
+    newFields.hidden = !creating;
+    newRecordFields.forEach((field) => {
+      field.required = creating;
+      field.disabled = !creating;
+    });
+    inviteForm.querySelector('button[type="submit"]').textContent = creating
+      ? "Create patient and send invitation"
+      : "Send invitation";
+  }
+  recordMode.addEventListener("change", updateRecordMode);
+  updateRecordMode();
+
+  inviteForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = inviteForm.querySelector("button[type=submit]");
+    const message = inviteForm.querySelector(".invite-message");
+    button.disabled = true;
+    message.className = "invite-message";
+    message.textContent = "Sending invitation…";
+    try {
+      const result = await api.invitePatient(
+        {
+          email: inviteForm.elements.email.value.trim(),
+          name: inviteForm.elements.name.value.trim(),
+          record_mode: recordMode.value,
+          patient_id: existingRecord.value,
+          age: inviteForm.elements.age.value,
+          sex: inviteForm.elements.sex.value,
+          injury: inviteForm.elements.injury.value.trim(),
+          implant: inviteForm.elements.implant.value.trim(),
+          surgery_date: inviteForm.elements.surgery_date.value,
+        },
+      );
+      if (result.record_created) {
+        await renderDoctorDashboard(root, ctx, result.patient_id);
+        return;
+      }
+      message.textContent = `Invitation sent to ${result.email}.`;
+      inviteForm.reset();
+      updateRecordMode();
+    } catch (error) {
+      message.classList.add("invite-error");
+      message.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   const buttons = [...root.querySelectorAll(".patient-item")];
   let latestRequest = 0;
 
@@ -75,7 +193,11 @@ async function renderDoctorDashboard(root, ctx) {
   }
 
   buttons.forEach((button) => button.addEventListener("click", () => select(button.dataset.id)));
-  if (patients.length) select(patients[0].id);
+  if (patients.length) select(
+    patients.some((patient) => patient.id === preferredPatientId)
+      ? preferredPatientId
+      : patients[0].id,
+  );
   else pane.innerHTML = `<p class="empty">No patients are monitored yet.</p>`;
 }
 

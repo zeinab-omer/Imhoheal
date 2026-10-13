@@ -1,9 +1,3 @@
-// AI Diagnostic / Data Testing Assistant (doctors only).
-//
-// Paste, upload, or preload weekly sensor readings (for example from the
-// physical hardware prototype) and the backend returns findings and a
-// predicted healing trajectory. The backend endpoint is POST /api/ai/predict.
-
 import { api } from "../api.js";
 import { esc, icon, statusChip } from "../format.js";
 import { mountLineChart } from "../charts.js";
@@ -17,7 +11,6 @@ const SAMPLE_CSV = `week,strain_load,bone_density
 5,56,252
 6,50,274`;
 
-// Accepts CSV (week, strain_load, bone_density) or JSON (a list, or {"readings": [...]}).
 function parseReadings(text) {
   const input = text.trim();
   if (!input) throw new Error("Paste or upload at least one weekly reading.");
@@ -53,7 +46,7 @@ export function renderAssistant(root) {
     <div class="shell page">
       <header class="page-head">
         <h1>AI diagnostic assistant</h1>
-        <p>Test sensor data from the Emoheal hardware prototype. Send weekly readings and see the AI findings and predicted healing path.</p>
+        <p>Test weekly demo values for plate strain and bone density. This rule-based placeholder is separate from ESP32/MPU6050 motion data and is not a clinical AI model.</p>
       </header>
       <div class="assistant-grid">
         <section class="panel" aria-labelledby="input-title">
@@ -76,8 +69,8 @@ export function renderAssistant(root) {
           <button type="button" class="btn btn-primary" id="run" style="width:100%">Predict healing path</button>
 
           <details class="hardware-note">
-            <summary>Connect the hardware prototype</summary>
-            <p style="margin-top:.5rem">Have the device, or a script reading its serial output, post readings to the API with a doctor's token:</p>
+            <summary>Test the separate healing-analysis API</summary>
+            <p style="margin-top:.5rem">This endpoint accepts manually supplied demo strain and density values only. For ESP32/MPU6050 motion data, pair the device from a patient's recovery page and use its device token.</p>
             <pre><code>curl -X POST /api/ai/predict \\
   -H "Authorization: Bearer &lt;token&gt;" \\
   -H "Content-Type: application/json" \\
@@ -100,7 +93,7 @@ export function renderAssistant(root) {
     const bubble = document.createElement("div");
     bubble.className = `bubble bubble--${kind}`;
     bubble.innerHTML = kind === "assistant"
-      ? `<p class="bubble-author">${icon("wedjat", 22)}Emoheal assistant</p>${html}`
+      ? `<p class="bubble-author">${icon("wedjat", 22)}ImhoHeal assistant</p>${html}`
       : html;
     thread.appendChild(bubble);
     bubble.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -119,7 +112,7 @@ export function renderAssistant(root) {
     event.target.value = "";
   });
 
-  // Offer to start from an existing patient's logs; hide quietly if the list fails.
+  // Offer to start from an existing patient's logs.
   const preload = root.querySelector("#preload");
   api.patients().then(({ patients }) => {
     preload.insertAdjacentHTML("beforeend", patients.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join(""));

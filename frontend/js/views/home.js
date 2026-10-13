@@ -1,10 +1,5 @@
-// Public home page: what Emoheal is, platform-level stats, and general reviews.
-// Nothing here is patient-identifying, so it needs no sign-in.
-
 import { api } from "../api.js";
 import { esc, icon } from "../format.js";
-
-// The hero draws the product itself: a sensor plate bridging a fractured bone.
 const HERO_ART = `
 <svg viewBox="0 0 560 300" role="img" aria-label="A smart plate screwed across a fractured bone, with sensors reporting strain and bone density.">
   <path class="art-bone" d="M120 122H262L272 138L258 152L270 166L262 178H120Z"/>
@@ -40,18 +35,18 @@ const HERO_ART = `
 const STEPS = [
   {
     icon: "watch",
-    title: "The plate measures",
-    text: "Sensors on the plate record how much load it carries and estimate bone density at the fracture site, once a week.",
+    title: "The prototype senses motion",
+    text: "An ESP32 with an MPU6050 can send movement and rotation samples to the dashboard. It does not measure bone density or plate strain.",
   },
   {
     icon: "wedjat",
-    title: "The AI interprets",
-    text: "Each reading is compared with the expected recovery curve. The model flags abnormal stress and projects when the bone should unite.",
+    title: "The dashboard organizes readings",
+    text: "The current motion view plots sensor samples. The separate healing analysis uses fictional demo readings and is not a trained medical AI.",
   },
   {
     icon: "user",
     title: "Your care team acts",
-    text: "Surgeons see every patient in one view. Patients see only their own recovery, and never anyone else's.",
+    text: "Doctors can pair a device to a demo patient. Patients see only their own record. The prototype is not for clinical decisions.",
   },
 ];
 
@@ -64,8 +59,8 @@ export async function renderHome(root, ctx) {
     <section class="hero" aria-labelledby="hero-title">
       <div class="shell hero-inner">
         <div class="hero-copy">
-          <h1 id="hero-title">Healing you can read, week by week</h1>
-          <p class="hero-lede">Emoheal pairs a smart orthopedic plate with an AI dashboard. Surgeons and patients see plate strain, bone density, and recovery progress as they change.</p>
+          <h1 id="hero-title">A connected prototype for orthopedic research</h1>
+          <p class="hero-lede">ImhoHeal is exploring ESP32-based motion sensing and a doctor-facing dashboard. The current MPU6050 prototype records movement; it does not directly measure bone healing.</p>
           <div class="hero-actions">
             <a class="btn btn-gold" href="${actionHref}">${actionText}</a>
             <button type="button" class="btn btn-outline-light" data-scroll="how-it-works">See how it works</button>
