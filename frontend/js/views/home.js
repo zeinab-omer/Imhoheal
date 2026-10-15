@@ -19,17 +19,17 @@ const HERO_ART = `
   <g><circle class="art-halo" cx="220" cy="118" r="12"/><circle class="art-halo" cx="280" cy="118" r="14"/><circle class="art-halo" cx="340" cy="118" r="12"/></g>
 
   <path class="art-leader" d="M220 112V74M340 112V74"/>
-  <rect class="art-label-box" x="140" y="34" width="156" height="40" rx="6"/>
-  <text class="art-label" x="154" y="52">Plate strain 41%</text>
-  <text class="art-label-small" x="154" y="67">falling as bone takes load</text>
-  <rect class="art-label-box" x="316" y="34" width="168" height="40" rx="6"/>
-  <text class="art-label" x="330" y="52">Density 318 mg/cm³</text>
-  <text class="art-label-small" x="330" y="67">rising each week</text>
+  <rect class="art-label-box" x="78" y="30" width="210" height="48" rx="6"/>
+  <text class="art-label" x="183" y="49">Plate strain 41%</text>
+  <text class="art-label-small" x="183" y="66">falling as bone takes load</text>
+  <rect class="art-label-box" x="300" y="30" width="210" height="48" rx="6"/>
+  <text class="art-label" x="405" y="49">Density 318 mg/cm³</text>
+  <text class="art-label-small" x="405" y="66">rising each week</text>
 
   <path class="art-leader" d="M280 138V232"/>
-  <rect class="art-label-box" x="206" y="232" width="148" height="40" rx="6"/>
-  <text class="art-label" x="220" y="250">Week 8 after surgery</text>
-  <text class="art-label-small" x="220" y="265">projected union: week 11</text>
+  <rect class="art-label-box" x="170" y="230" width="220" height="48" rx="6"/>
+  <text class="art-label" x="280" y="249">Week 8 after surgery</text>
+  <text class="art-label-small" x="280" y="266">projected union: week 11</text>
 </svg>`;
 
 const STEPS = [
@@ -59,8 +59,8 @@ export async function renderHome(root, ctx) {
     <section class="hero" aria-labelledby="hero-title">
       <div class="shell hero-inner">
         <div class="hero-copy">
-          <h1 id="hero-title">A connected prototype for orthopedic research</h1>
-          <p class="hero-lede">ImhoHeal is exploring ESP32-based motion sensing and a doctor-facing dashboard. The current MPU6050 prototype records movement; it does not directly measure bone healing.</p>
+          <h1 id="hero-title">Where ancient wisdom meets smart technology, healing begins.</h1>
+          <p class="hero-lede">ImhoHeal is exploring Arduino-based motion sensing and a doctor-facing dashboard. The current MPU6050 prototype records movement; it does not directly measure bone healing.</p>
           <div class="hero-actions">
             <a class="btn btn-gold" href="${actionHref}">${actionText}</a>
             <button type="button" class="btn btn-outline-light" data-scroll="how-it-works">See how it works</button>

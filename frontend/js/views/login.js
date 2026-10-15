@@ -25,10 +25,6 @@ export function renderLogin(root, ctx) {
         </form>
       </section>
 
-      <aside class="demo-accounts">
-        <h2>Invited accounts only</h2>
-        <p>An administrator must invite your email address. Use the password you created from the invitation link.</p>
-      </aside>
     </div>`;
 
   const form = root.querySelector("#login-form");
