@@ -5,10 +5,12 @@ import { renderDashboard } from "./views/dashboard.js";
 import { renderHome } from "./views/home.js";
 import { renderLogin } from "./views/login.js";
 import { renderSetPassword } from "./views/setPassword.js";
+import { initLanguage } from "./i18n.js";
 
 const root = document.getElementById("view");
 const nav = document.getElementById("main-nav");
 const sessionSlot = document.getElementById("session-slot");
+initLanguage();
 const ROUTES = {
   "/": { render: renderHome, roles: null },
   "/login": { render: renderLogin, roles: null },
