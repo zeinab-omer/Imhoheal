@@ -50,8 +50,11 @@ from supabase_client import (
 _current_dir = Path(__file__).resolve().parent
 if (_current_dir.parent / "frontend").exists():
     FRONTEND_DIR = _current_dir.parent / "frontend"
-else:
+elif (_current_dir / "frontend").exists():
     FRONTEND_DIR = _current_dir / "frontend"
+else:
+    FRONTEND_DIR = _current_dir.parent / "frontend"
+
 DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
