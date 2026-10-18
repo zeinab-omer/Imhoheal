@@ -221,3 +221,37 @@ async function renderPatientPortal(root, ctx) {
     pane.innerHTML = `<p class="error-box" role="alert">${esc(error.message)}</p>`;
   }
 }
+
+
+
+// هنا بنحدد رقم المريض اللي فاتحين الداشبورد بتاعته
+const CURRENT_PATIENT_ID = "1000"; 
+
+async function fetchLatestSensorData() {
+    try {
+        const response = await fetch(`/api/readings/latest/${CURRENT_PATIENT_ID}`);
+        if (!response.ok) return;
+
+        const data = await response.json();
+
+        if (data.angle !== undefined) {
+            // تحديث الزاوية والحالة في عناصر الـ HTML عندك
+            document.getElementById('sensor-angle').innerText = `${Math.round(data.angle)}°`;
+            
+            const statusElement = document.getElementById('sensor-status');
+            statusElement.innerText = data.status;
+
+            if (data.status === 'Warning') {
+                statusElement.style.color = 'red';
+                statusElement.style.fontWeight = 'bold';
+            } else {
+                statusElement.style.color = 'green';
+            }
+        }
+    } catch (error) {
+        console.error("Error fetching sensor reading:", error);
+    }
+}
+
+// تحديث تلقائي كل ثانيتين
+setInterval(fetchLatestSensorData, 2000);

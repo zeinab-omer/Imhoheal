@@ -867,3 +867,56 @@ if __name__ == "__main__":
         port=int(os.environ.get("EMOHEAL_PORT", "5000")),
         debug=os.environ.get("EMOHEAL_DEBUG", "false").lower() == "true",
     )
+
+
+from supabase_client import insert_rows, query_rows
+
+@app.route('/api/readings', methods=['GET', 'POST'])
+def add_sensor_reading():
+    try:
+        body = request.get_json(silent=True) or {}
+        patient_id = body.get('patient_id', 'P-BCC60BDB93B')
+        angle = body.get('angle', 0)
+        status = body.get('status', 'Normal')
+
+        # حفظ القراءة مباشرة في جدول سوبا بيز
+        insert_rows(
+            "sensor_readings",
+            {
+                "patient_id": str(patient_id),
+                "angle": float(angle),
+                "status": status
+            },
+            admin=True
+        )
+
+        return jsonify({"message": "Saved to Supabase successfully", "patient_id": patient_id, "angle": angle}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/readings/latest/<patient_id>")
+def get_latest_reading(patient_id):
+    try:
+        # جلب أحدث قراءة مباشرة من جدول سوبا بيز
+        rows = query_rows(
+            "sensor_readings",
+            {
+                "select": "*",
+                "patient_id": f"eq.{patient_id}",
+                "order": "created_at.desc",
+                "limit": "1"
+            },
+            admin=True
+        )
+        if rows:
+            latest = rows[0]
+            return jsonify({
+                "patient_id": patient_id,
+                "angle": latest.get("angle", 0),
+                "status": latest.get("status", "Normal"),
+                "created_at": latest.get("created_at")
+            }), 200
+        return jsonify({"message": "No readings"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

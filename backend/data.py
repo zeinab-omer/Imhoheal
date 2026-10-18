@@ -71,6 +71,7 @@ _PROFILES = [
      "injury": "Humeral shaft fracture (right)", "implant": "EH-Plate H3, humerus"},
     {"id": "P-1006", "name": "Mariam Fathy", "age": 63, "sex": "Female",
      "injury": "Tibial plateau fracture (left)", "implant": "EH-Plate T7, tibia"},
+    
 ]
 
 SURGEON = "Dr. Amira Khalil"
