@@ -307,6 +307,13 @@ function renderMotion(container, patient, audience) {
     mountMotionCharts(container, patient.motion.readings);
 }
 
+export function refreshPatientMotion(container, motion) {
+  const data = container.querySelector(".motion-data");
+  if (!data) return;
+  data.innerHTML = renderMotionData(motion);
+  mountMotionCharts(container, motion.readings);
+}
+
 // ---------- Public entry ----------
 export function renderPatientDetail(container, patient, audience = "doctor") {
   const title = audience === "patient" ? "Your healing progress" : patient.name;

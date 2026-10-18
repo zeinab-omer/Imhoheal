@@ -2,12 +2,48 @@
 
 import { api } from "../api.js";
 import { STATUS, esc, firstName, statusChip } from "../format.js";
-import { renderPatientDetail } from "./patientDetail.js";
+import { refreshPatientMotion, renderPatientDetail } from "./patientDetail.js";
+
+const MOTION_REFRESH_INTERVAL_MS = 5000;
+let motionRefreshTimer;
 
 export function renderDashboard(root, ctx) {
+  clearInterval(motionRefreshTimer);
   return ctx.session.user.role === "doctor"
     ? renderDoctorDashboard(root, ctx)
     : renderPatientPortal(root, ctx);
+}
+
+function startMotionRefresh(pane, getPatient) {
+  clearInterval(motionRefreshTimer);
+  let refreshing = false;
+  motionRefreshTimer = setInterval(async () => {
+    if (!pane.isConnected) {
+      clearInterval(motionRefreshTimer);
+      motionRefreshTimer = null;
+      return;
+    }
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      const result = await getPatient();
+      if (!result) return;
+      const { patient } = result;
+      refreshPatientMotion(pane, patient.motion);
+      pane.querySelector(".motion-refresh-error")?.remove();
+    } catch (error) {
+      let message = pane.querySelector(".motion-refresh-error");
+      if (!message) {
+        message = document.createElement("p");
+        message.className = "motion-refresh-error error-box";
+        message.setAttribute("role", "status");
+        pane.querySelector(".motion-host")?.prepend(message);
+      }
+      if (message) message.textContent = `Sensor data refresh failed: ${error.message}`;
+    } finally {
+      refreshing = false;
+    }
+  }, MOTION_REFRESH_INTERVAL_MS);
 }
 
 // ---------- Doctor ----------
@@ -177,9 +213,11 @@ async function renderDoctorDashboard(root, ctx, preferredPatientId = null) {
 
   const buttons = [...root.querySelectorAll(".patient-item")];
   let latestRequest = 0;
+  let selectedPatientId = null;
 
   async function select(id) {
     const requestId = ++latestRequest;
+    selectedPatientId = id;
     buttons.forEach((b) => b.setAttribute("aria-current", String(b.dataset.id === id)));
     pane.innerHTML = `<div class="loading">Loading patient…</div>`;
     try {
@@ -193,12 +231,17 @@ async function renderDoctorDashboard(root, ctx, preferredPatientId = null) {
   }
 
   buttons.forEach((button) => button.addEventListener("click", () => select(button.dataset.id)));
-  if (patients.length) select(
-    patients.some((patient) => patient.id === preferredPatientId)
+  if (patients.length) {
+    const initialPatientId = patients.some((patient) => patient.id === preferredPatientId)
       ? preferredPatientId
-      : patients[0].id,
-  );
-  else pane.innerHTML = `<p class="empty">No patients are monitored yet.</p>`;
+      : patients[0].id;
+    await select(initialPatientId);
+    startMotionRefresh(pane, async () => {
+      const patientId = selectedPatientId;
+      const result = await api.patient(patientId);
+      return selectedPatientId === patientId ? result : null;
+    });
+  } else pane.innerHTML = `<p class="empty">No patients are monitored yet.</p>`;
 }
 
 // ---------- Patient ----------
@@ -217,41 +260,8 @@ async function renderPatientPortal(root, ctx) {
   try {
     const { patient } = await api.myPatient();
     renderPatientDetail(pane, patient, "patient");
+    startMotionRefresh(pane, () => api.myPatient());
   } catch (error) {
     pane.innerHTML = `<p class="error-box" role="alert">${esc(error.message)}</p>`;
   }
 }
-
-
-
-// هنا بنحدد رقم المريض اللي فاتحين الداشبورد بتاعته
-const CURRENT_PATIENT_ID = "1000"; 
-
-async function fetchLatestSensorData() {
-    try {
-        const response = await fetch(`/api/readings/latest/${CURRENT_PATIENT_ID}`);
-        if (!response.ok) return;
-
-        const data = await response.json();
-
-        if (data.angle !== undefined) {
-            // تحديث الزاوية والحالة في عناصر الـ HTML عندك
-            document.getElementById('sensor-angle').innerText = `${Math.round(data.angle)}°`;
-            
-            const statusElement = document.getElementById('sensor-status');
-            statusElement.innerText = data.status;
-
-            if (data.status === 'Warning') {
-                statusElement.style.color = 'red';
-                statusElement.style.fontWeight = 'bold';
-            } else {
-                statusElement.style.color = 'green';
-            }
-        }
-    } catch (error) {
-        console.error("Error fetching sensor reading:", error);
-    }
-}
-
-// تحديث تلقائي كل ثانيتين
-setInterval(fetchLatestSensorData, 2000);

@@ -1,4 +1,5 @@
 import json
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,7 +9,13 @@ from urllib.request import Request, urlopen
 import serial
 import serial.tools.list_ports
 
-from config import API_BASE_URL, DEVICE_ID, DEVICE_TOKEN, PORT
+try:
+    from config import API_BASE_URL, DEVICE_ID, DEVICE_TOKEN, PORT
+except ImportError as problem:
+    raise RuntimeError(
+        "Missing config.py. Copy config.example.py to config.py and set the "
+        "server URL, paired device ID/token, and optional serial port."
+    ) from problem
 
 BAUD = 115200
 UPLOAD_INTERVAL_SECONDS = 5

@@ -57,7 +57,8 @@ five seconds to avoid flooding Supabase. Sequence numbers and unuploaded batches
 on the next run. Do not delete `sequence.txt` while continuing to use the same
 paired device, or already-used sequence numbers could be sent again.
 
-The patient's sensor section displays the saved Arduino angles and alarm
-states. For Arduino access, expose Flask only on a trusted local network and
-use the computer's LAN address in `API_BASE_URL`; do not expose Flask's
+The selected patient's sensor section refreshes automatically every five
+seconds and displays the saved Arduino angles and alarm states. For Arduino
+access from another computer, expose Flask only on a trusted local network and
+use the server computer's LAN address in `API_BASE_URL`; do not expose Flask's
 development server to the public Internet.
